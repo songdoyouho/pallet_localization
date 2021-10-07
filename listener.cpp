@@ -39,6 +39,7 @@ using namespace InferenceEngine;
 #include <time.h>
 #include <visualization_msgs/Marker.h>
 #include <cmath>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #define pi 3.14159265
 
 // initialize
@@ -268,12 +269,17 @@ int main(int argc, char** argv) {
             }
         }
     }
-    cv::Mat a_b_c_d = cv::Mat::zeros(cv::Size(1, 3), CV_32FC1);
+    cv::Mat a_b_d = cv::Mat::zeros(cv::Size(1, 3), CV_32FC1);
+    int grid_number_thr = 75;
+    int pallet_min_range = 40; // mm
+    int pallet_max_range = 60; // mm
+    float exist_thr = 0.99f;
 
     ros::init(argc, argv, "listener");
     ros::NodeHandle node;   
     //ros::Subscriber color_sub, depth_sub, imu_sub, acc_sub;
-	
+	ros::Publisher pose_pub = node.advertise<geometry_msgs::PoseWithCovarianceStamped>("pallet_pose", 10);
+
     ros::Publisher marker_pub = node.advertise<visualization_msgs::Marker>("visualization_marker", 10);
     ros::Rate r(1);
     srand(1);
@@ -546,46 +552,48 @@ int main(int argc, char** argv) {
                                 object.ymax = depth_frame.rows;
 
                             //normalize(depth_frame, depth_frame, 0, 1, CV_MINMAX);
+                            // get the bbox depth image
                             bbox_depth = depth_frame(cv::Range(object.ymin, object.ymax), cv::Range(object.xmin, object.xmax));
 
+                            //-------------------------------------------------------------------------------------------------
                             // 將x, y, z pubilsh在rviz上顯示
-                            visualization_msgs::Marker points, line_strip, line_list, red_points; 
+                            visualization_msgs::Marker points, blue_line_list, line_list, red_points; 
 
                             //初始化
-                            points.header.frame_id = line_strip.header.frame_id = line_list.header.frame_id = "/camera_link";
-                            points.header.stamp = line_strip.header.stamp = line_list.header.stamp = ros::Time::now();
-                            points.ns = line_strip.ns = line_list.ns = "points_and_lines";
-                            points.action = line_strip.action = line_list.action = visualization_msgs::Marker::ADD;
-                            points.pose.orientation.w = line_strip.pose.orientation.w = line_list.pose.orientation.w = 1.0;
+                            points.header.frame_id = blue_line_list.header.frame_id = line_list.header.frame_id = "/camera_link";
+                            points.header.stamp = blue_line_list.header.stamp = line_list.header.stamp = ros::Time::now();
+                            points.ns = blue_line_list.ns = line_list.ns = "points_and_lines";
+                            points.action = blue_line_list.action = line_list.action = visualization_msgs::Marker::ADD;
+                            points.pose.orientation.w = blue_line_list.pose.orientation.w = line_list.pose.orientation.w = 1.0;
 
-                            red_points.header.frame_id = line_strip.header.frame_id = line_list.header.frame_id = "/camera_link";
-                            red_points.header.stamp = line_strip.header.stamp = line_list.header.stamp = ros::Time::now();
-                            red_points.ns = line_strip.ns = line_list.ns = "points_and_lines";
-                            red_points.action = line_strip.action = line_list.action = visualization_msgs::Marker::ADD;
-                            red_points.pose.orientation.w = line_strip.pose.orientation.w = line_list.pose.orientation.w = 1.0;
+                            red_points.header.frame_id = blue_line_list.header.frame_id = line_list.header.frame_id = "/camera_link";
+                            red_points.header.stamp = blue_line_list.header.stamp = line_list.header.stamp = ros::Time::now();
+                            red_points.ns = blue_line_list.ns = line_list.ns = "points_and_lines";
+                            red_points.action = blue_line_list.action = line_list.action = visualization_msgs::Marker::ADD;
+                            red_points.pose.orientation.w = blue_line_list.pose.orientation.w = line_list.pose.orientation.w = 1.0;
 
                             //分配3个id
                             points.id = 0;
-                            line_strip.id = 1;
+                            //line_strip.id = 1;
                             line_list.id = 2;
                             red_points.id = 3;
+                            blue_line_list.id = 4;
 
                             //初始化形状
                             points.type = visualization_msgs::Marker::POINTS;
                             red_points.type = visualization_msgs::Marker::POINTS;
-                            line_strip.type = visualization_msgs::Marker::LINE_STRIP;
                             line_list.type = visualization_msgs::Marker::LINE_LIST;
+                            blue_line_list.type = visualization_msgs::Marker::LINE_LIST;
 
                             //初始化大小
-                            // POINTS markers use x and y scale for width/height respectively
                             points.scale.x = 1;
                             points.scale.y = 1;
                             red_points.scale.x = 0.5;
                             red_points.scale.y = 0.5;
 
                             // LINE_STRIP/LINE_LIST markers use only the x component of scale, for the line width
-                            line_strip.scale.x = 0.1;
                             line_list.scale.x = 10;
+                            blue_line_list.scale.x = 10;
 
                             //初始化颜色
                             // Points are green
@@ -594,13 +602,12 @@ int main(int argc, char** argv) {
                             red_points.color.r = 1.0f;
                             red_points.color.a = 1.0;
 
-                            // Line strip is blue
-                            line_strip.color.b = 1.0;
-                            line_strip.color.a = 1.0;
-
                             // Line list is red
                             line_list.color.r = 1.0;
                             line_list.color.a = 1.0;
+                            blue_line_list.color.b = 1.0;
+                            blue_line_list.color.a = 1.0;
+                            //------------------------------------------------------------------------------------------------
 
                             // get the maximum range value
                             //double min, max;
@@ -619,44 +626,9 @@ int main(int argc, char** argv) {
                                     yyy = int((i + object.ymin) / y_range);
                                     zzz = int(bbox_depth.at<float>(i, j) / z_range);
                                     grid[xxx][yyy][zzz]++;
-                                    //std::cout << xxx << " " << yyy << " " << zzz << " " << grid[xxx][yyy][zzz] << std::endl;
                                 }
                             }
 
-                            // show grid value
-                            /*
-                            for (int k = 0; k < int(resolution_z / z_range); k++){
-                                for (int j = 0; j < int(resolution_y / y_range); j++){
-                                    for (int i = 0; i < int(resolution_x / x_range); i++){
-                                        if (k < 80 && k > 50){
-                                            std::cout << grid[i][j][k] << " ";
-                                        }
-                                    }
-                                    if (k < 80 && k > 50){
-                                        std::cout << std::endl;
-                                    }
-                                }
-                                if (k < 80 && k > 50){
-                                    std::cout << "++++++++++++++++++++++++++++++" << std::endl;
-                                }
-                            }
-                            */
-
-                            // create a index to search the grid in z axis
-                            int grid_z[int(resolution_x / x_range)][int(resolution_y / y_range)] {0};
-                            int grid_z_index[int(resolution_x / x_range)][int(resolution_y / y_range)] {0};
-                            // find the maximum z grid
-                            for (int j = 0; j < int(resolution_y / y_range); j++){
-                                for (int i = 0; i < int(resolution_x / x_range); i++){
-                                    for (int k = 0; k < int(resolution_z / z_range); k++){
-                                        if (grid[i][j][k] > grid_z[i][j]){
-                                            grid_z[i][j] = grid[i][j][k];
-                                            grid_z_index[i][j] = k;
-                                        }
-                                    }
-                                }
-                            }
-                            
                             // plot the whole pallet points at rviz
                             int max_depth_sample = 1;
                             for (int i = 0; i < bbox_depth.rows; i++){
@@ -666,82 +638,16 @@ int main(int argc, char** argv) {
                                     p1.x = j + object.xmin;
                                     p1.y = i + object.ymin;
                                     p1.z = bbox_depth.at<float>(i, j);
-                                    red_points.points.push_back(p1);
-                                    /*
-                                    if (int(bbox_depth.at<float>(i, j) / z_range) == grid_z_index[int((j + object.xmin) / x_range)][int((i + object.ymin) / y_range)]){
-                                        if (grid_z[int((j + object.xmin) / x_range)][int((i + object.ymin) / y_range)] > 50){
-                                            if (int(bbox_depth.at<float>(i, j) / z_range) < 50 && int(bbox_depth.at<float>(i, j) / z_range) > 10){
-                                                
-                                                geometry_msgs::Point p;
-                                                p.x = j;
-                                                p.y = i;
-                                                p.z = bbox_depth.at<float>(i, j);
-                                                points.points.push_back(p);
-                                                
-                                                max_depth_sample++;
-                                            }
-                                        }
-                                    }
-                                    */
+                                    //red_points.points.push_back(p1);
                                 }
                             }
-                            marker_pub.publish(red_points);
-                            //marker_pub.publish(points);
-                            /*
-                            // prepare the points for pallet plane fitting
-                            int total_point_number = 0; // total point number
-                            int total_x = 0;
-                            int total_y = 0;
-                            int total_z = 0;
-                            cv::Mat x_y_1 = cv::Mat::zeros(cv::Size(3, max_depth_sample), CV_32FC1); // x, y = col row
-                            cv::Mat zzzz = cv::Mat::zeros(cv::Size(1, max_depth_sample), CV_32FC1);
-
-                            for (int i = 0; i < bbox_depth.rows; i++){
-                                for (int j = 0; j < bbox_depth.cols; j++){
-                                    if (int(bbox_depth.at<float>(i, j) < 1)) continue;
-
-                                    if (int(bbox_depth.at<float>(i, j) / z_range) == grid_z_index[int((j + object.xmin) / x_range)][int((i + object.ymin) / y_range)]){
-                                        if (grid_z[int((j + object.xmin) / x_range)][int((i + object.ymin) / y_range)] > 50){
-                                            if (int(bbox_depth.at<float>(i, j) / z_range) < 50 && int(bbox_depth.at<float>(i, j) / z_range) > 10){
-                                                total_x += j;
-                                                total_y += i;
-                                                total_z += bbox_depth.at<float>(i, j);
-                                                
-                                                x_y_1.at<float>(total_point_number, 0) = j;
-                                                x_y_1.at<float>(total_point_number, 1) = i;
-                                                x_y_1.at<float>(total_point_number, 2) = 1;
-                                                zzzz.at<float>(total_point_number, 0) = -(bbox_depth.at<float>(i, j));
-                                                
-                                                total_point_number++;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            //marker_pub.publish(red_points);
                             
-                            // calculate the pallet plane equation
-                            cv::Mat a_b_c_d = ((x_y_1.t()*x_y_1).inv()*x_y_1.t()*zzzz);
-                            //std::cout << "a_b_c_d: " << a_b_c_d << " " << std::endl;
-
-                            // display the normal vector for the pallet plane at rviz
-                            geometry_msgs::Point p1;
-                            p1.x = int(total_x / total_point_number);
-                            p1.y = int(total_y / total_point_number);
-                            p1.z = int(total_z / total_point_number);
-                            line_list.points.push_back(p1);
-
-                            geometry_msgs::Point p2;
-                            p2.x = int(a_b_c_d.at<float>(0, 0)*10000);
-                            p2.y = int(a_b_c_d.at<float>(0, 1)*10000);
-                            p2.z = 1*10000;
-                            line_list.points.push_back(p2);
-                            marker_pub.publish(line_list);
-                            */
                             // if this grid pass the condition, * 1.2 else * 0.9
                             for (int k = 0; k < int(resolution_z / z_range); k++){                        
                                 for (int j = 0; j < int(resolution_y / y_range); j++){
                                     for (int i = 0; i < int(resolution_x / x_range); i++){
-                                        if (grid[i][j][k] > 75 && k < 70 && k > 40){
+                                        if (grid[i][j][k] > grid_number_thr && k < pallet_max_range && k > pallet_min_range){
                                             exist_grid[i][j][k] = exist_grid[i][j][k] * 1.2;
                                         }
                                         else{
@@ -750,26 +656,13 @@ int main(int argc, char** argv) {
                                     }
                                 }
                             }
-
-                            // if the possibility > 0.75, view as a existed grid
-                            /*
-                            for (int k = 0; k < int(resolution_z / z_range); k++){                        
-                                for (int j = 0; j < int(resolution_y / y_range); j++){
-                                    for (int i = 0; i < int(resolution_x / x_range); i++){
-                                        if (exist_grid[i][j][k] > 0.75){
-                                            max_depth_sample++;
-                                        }
-                                    }
-                                }
-                            }
-                            */
-                            
+                            // calculate the passed points
                             for (int i = 0; i < bbox_depth.rows; i++){
                                 for (int j = 0; j < bbox_depth.cols; j++){
                                     xxx = int((j + object.xmin) / x_range);
                                     yyy = int((i + object.ymin) / y_range);
                                     zzz = int(bbox_depth.at<float>(i, j) / z_range);
-                                    if (exist_grid[xxx][yyy][zzz] > 0.99){
+                                    if (exist_grid[xxx][yyy][zzz] > exist_thr){
                                         max_depth_sample++;
                                     }
                                 }
@@ -784,19 +677,18 @@ int main(int argc, char** argv) {
                             cv::Mat zzzz = cv::Mat::zeros(cv::Size(1, max_depth_sample), CV_32FC1);
 
                             // display the grid selection result at rviz and prepare plane fitting
-                            
                             for (int i = 0; i < bbox_depth.rows; i++){
                                 for (int j = 0; j < bbox_depth.cols; j++){
                                     xxx = int((j + object.xmin) / x_range);
                                     yyy = int((i + object.ymin) / y_range);
                                     zzz = int(bbox_depth.at<float>(i, j) / z_range);
-                                    if (exist_grid[xxx][yyy][zzz] > 0.99){
+                                    if (exist_grid[xxx][yyy][zzz] > exist_thr){
                                         geometry_msgs::Point p;
                                         p.x = j + object.xmin;
                                         p.y = i + object.ymin;
                                         p.z = bbox_depth.at<float>(i, j);
                                         points.points.push_back(p);
-
+                                        
                                         total_x += j + object.xmin;
                                         total_y += i + object.ymin;
                                         total_z += bbox_depth.at<float>(i, j);
@@ -811,304 +703,85 @@ int main(int argc, char** argv) {
                                 }
                             }
                             
-                            /*
-                            for (int k = 0; k < int(resolution_z / z_range); k++){                        
-                                for (int j = 0; j < int(resolution_y / y_range); j++){
-                                    for (int i = 0; i < int(resolution_x / x_range); i++){
-                                        
-                                        geometry_msgs::Point p;
-                                        p.x = i * x_range;
-                                        p.y = j * y_range;
-                                        p.z = k * z_range;
-                                        points.points.push_back(p);
-                                        
-                                        if (exist_grid[i][j][k] > 0.75){
-                                            
-                                            geometry_msgs::Point p;
-                                            p.x = i * x_range;
-                                            p.y = j * y_range;
-                                            p.z = k * z_range;
-                                            points.points.push_back(p);
-                                            
-                                            total_x += i * x_range;
-                                            total_y += j * y_range;
-                                            total_z += k * z_range;
-                                            
-                                            x_y_1.at<float>(total_point_number, 0) = i * x_range;
-                                            x_y_1.at<float>(total_point_number, 1) = j * y_range;
-                                            x_y_1.at<float>(total_point_number, 2) = 1;
-                                            zzzz.at<float>(total_point_number, 0) = -(k * z_range);
-                                            
-                                            total_point_number++;
-                                        }
-                                    }
-                                }
-                            }
-                            */
                             marker_pub.publish(points);
                             
                             // calculate the pallet plane equation
-                            //cv::Mat abcd = ((x_y_1.t() * x_y_1).inv() * x_y_1.t() * zzzz);
-                            //a_b_c_d = a_b_c_d*0.99 + abcd*0.01;
-                            a_b_c_d = ((x_y_1.t() * x_y_1).inv() * x_y_1.t() * zzzz);
-                            std::cout << "a_b_c_d: " << a_b_c_d << " " << std::endl;
+                            // ax + by + z + c = 0
+                            a_b_d = ((x_y_1.t() * x_y_1).inv() * x_y_1.t() * zzzz);
+                            std::cout << "a_b_d: " << a_b_d << " " << std::endl;
+                            //std::cout << a_b_d.at<float>(0, 0) << " " << a_b_d.at<float>(1, 0) << " " << a_b_d.at<float>(2, 0) << std::endl;
+                            
+                            // draw the fitting plane
+                            for (int i = 0; i < bbox_depth.rows; i++){
+                                for (int j = 0; j < bbox_depth.cols; j++){
+                                    xxx = int((j + object.xmin) / x_range);
+                                    yyy = int((i + object.ymin) / y_range);
+                                    zzz = int(bbox_depth.at<float>(i, j) / z_range);
+                                    if (exist_grid[xxx][yyy][zzz] > exist_thr){
+                                        geometry_msgs::Point p1;
+                                        p1.x = j + object.xmin;
+                                        p1.y = i + object.ymin;
+                                        p1.z = -(a_b_d.at<float>(0, 0) * (j + object.xmin) + a_b_d.at<float>(1, 0) * (i + object.ymin) + a_b_d.at<float>(2, 0));
+                                        red_points.points.push_back(p1);
+                                    }
+                                }
+                            }
+                            marker_pub.publish(red_points);                            
 
                             // display the normal vector for the pallet plane at rviz
                             geometry_msgs::Point p1;
-                            p1.x = int(total_x / total_point_number);
-                            p1.y = int(total_y / total_point_number);
+                            p1.x = int((object.xmax - object.xmin) / 2) + object.xmin; //int(total_x / total_point_number);
+                            p1.y = int((object.ymax - object.ymin) / 2) + object.ymin; //int(total_y / total_point_number);
                             p1.z = int(total_z / total_point_number);
                             line_list.points.push_back(p1);
+                            blue_line_list.points.push_back(p1);
 
                             geometry_msgs::Point p2;
-                            p2.x = int(total_x / total_point_number) + int(a_b_c_d.at<float>(0, 0) * 1000);
-                            p2.y = int(total_y / total_point_number);//int(a_b_c_d.at<float>(0, 1) * 10000);
-                            p2.z = int(total_z / total_point_number) + 1 * 1000;
+                            p2.x = int(total_x / total_point_number) + int(a_b_d.at<float>(0, 0) * 1000);
+                            p2.y = int(total_y / total_point_number); //int(a_b_d.at<float>(0, 1) * 10000); // 我們假設牙叉與棧板在同一高度（因為在韓信可以設定）
+                            p2.z = int(total_z / total_point_number) + 1 * 1000; // z 軸法向量維持 1
                             line_list.points.push_back(p2);
                             marker_pub.publish(line_list);
+
+                            geometry_msgs::Point p3;
+                            p3.x = int(total_x / total_point_number);
+                            p3.y = int(total_y / total_point_number);
+                            p3.z = int(total_z / total_point_number) + 1 * 1000; // z 軸法向量維持 1
+                            blue_line_list.points.push_back(p3);
+                            marker_pub.publish(blue_line_list);
+
+                            // prepare pose message
+                            geometry_msgs::PoseWithCovarianceStamped pose_msg;
+                            pose_msg.header.frame_id = "/camera_link";
+
+                            float XXX = total_x / total_point_number;
+                            float YYY = total_y / total_point_number;
+                            float ZZZ = total_z / total_point_number;
+
+                            float uni = sqrt(a_b_d.at<float>(0, 0) * a_b_d.at<float>(0, 0) + a_b_d.at<float>(1, 0) * a_b_d.at<float>(1, 0) + 1);
+                            cv::Mat pallet_uni_vec = (cv::Mat_<float>(3, 1) << a_b_d.at<float>(0, 0) / uni, a_b_d.at<float>(1, 0) / uni, 1 / uni);
+                            cv::Mat camera_uni_vec = (cv::Mat_<float>(3, 1) << 0, 0, 1);
+
+                            std::cout << "pallet_uni_vec: " << pallet_uni_vec << std::endl;
+                            std::cout << "camera_uni_vec: " << camera_uni_vec << std::endl;
+
+                            cv::Mat cross_result = pallet_uni_vec.cross(camera_uni_vec);
+                            float cross_uni = sqrt(cross_result.at<float>(0, 0) * cross_result.at<float>(0, 0) + cross_result.at<float>(1, 0) * cross_result.at<float>(1, 0) + cross_result.at<float>(2, 0) * cross_result.at<float>(2, 0));
+                            std::cout << "cross_result: " << cross_result / cross_uni << std::endl;
+
+                            double dot_result = pallet_uni_vec.dot(camera_uni_vec);
+                            float half_theta = acos(dot_result / uni) / 2;
                             
-                            //****************************************************************************************************************
-                            // get the maximum range value
-                            //double min, max;
-                            //cv::minMaxLoc(bbox_depth, &min, &max);
-                            /*
-                            int depth_sample_count[500] {0};                            
-                            for (int i = 0; i < bbox_depth.rows; i++){
-                                for (int j = 0; j < bbox_depth.cols; j++){
+                            pose_msg.pose.pose.position.x = XXX;
+                            pose_msg.pose.pose.position.y = YYY;
+                            pose_msg.pose.pose.position.z = ZZZ;
+                            pose_msg.pose.pose.orientation.x = sin(half_theta) * cross_result.at<float>(0, 0);
+                            pose_msg.pose.pose.orientation.y = sin(half_theta) * cross_result.at<float>(1, 0);
+                            pose_msg.pose.pose.orientation.z = sin(half_theta) * cross_result.at<float>(2, 0);
+                            pose_msg.pose.pose.orientation.w = cos(half_theta);
 
-
-                                    if (int(bbox_depth.at<float>(i, j) < 1)) continue;
-                                    depth_sample_count[int(bbox_depth.at<float>(i, j)/50)]++;
-                                    
-                                    geometry_msgs::Point p;
-                                    p.x = j;
-                                    p.y = i;
-                                    p.z = bbox_depth.at<float>(i, j);
-                                    red_points.points.push_back(p);
-                                }
-                            }
-
-                            marker_pub.publish(red_points);
-                            marker_pub.publish(points);
-                            */
-                            /*
-                            // find the maximum slice
-                            int max_depth_sample_index = 0;
-                            int max_depth_sample = 0;
-                            for (int i = 0; i < 500; i++) {
-                                if (depth_sample_count[i] > max_depth_sample){
-                                    max_depth_sample = depth_sample_count[i];
-                                    max_depth_sample_index = i;
-                                }
-                            }
+                            pose_pub.publish(pose_msg);
                             
-                            // copy the points
-                            int total_point_number = 0; // total point number
-                            int total_x = 0;
-                            int total_y = 0;
-                            int total_z = 0;
-                            */
-                            /*
-                            cv::Mat test = cv::Mat::zeros(cv::Size(2, 3), CV_32FC1); // x, y = col row
-                            test.at<float>(0, 0) = 6.0f;
-                            test.at<float>(0, 1) = 1.0f;
-                            test.at<float>(1, 0) = 2.0f;
-                            test.at<float>(1, 1) = 3.0f;
-                            test.at<float>(2, 0) = 4.0f;
-                            test.at<float>(2, 1) = 5.0f;
-                            // result be like 
-                            M = [6, 1;
-                                 2, 3;
-                                 4, 5]
-                            */    
-                            /*
-                            cv::Mat x_y_z = cv::Mat::zeros(cv::Size(3, max_depth_sample), CV_32FC1); // x, y = col row
-                            cv::Mat x_y_1 = cv::Mat::zeros(cv::Size(3, max_depth_sample), CV_32FC1);
-                            cv::Mat zzz = cv::Mat::zeros(cv::Size(1, max_depth_sample), CV_32FC1);
-                            for (int i = 0; i < bbox_depth.rows; i++){
-                                for (int j = 0; j < bbox_depth.cols; j++){
-                                    if (int(bbox_depth.at<float>(i, j)/50) == max_depth_sample_index){
-                                        x_y_1.at<float>(total_point_number, 0) = j;
-                                        x_y_1.at<float>(total_point_number, 1) = i;
-                                        x_y_1.at<float>(total_point_number, 2) = 1;
-                                        zzz.at<float>(total_point_number, 0) = -(bbox_depth.at<float>(i, j));
-                                        
-                                        x_y_z.at<float>(0, total_point_number) = j; // x 
-                                        x_y_z.at<float>(1, total_point_number) = i; // y
-                                        x_y_z.at<float>(2, total_point_number) = bbox_depth.at<float>(i, j); // z
-                                        
-                                        total_point_number++;
-                                        total_x += j;
-                                        total_y += i;
-                                        total_z += bbox_depth.at<float>(i, j);
-                                    }
-                                }
-                            }
-                            
-                            cv::Mat a_b_c_d = -((x_y_1.t()*x_y_1).inv()*x_y_1.t()*zzz);
-                            std::cout << "a_b_c_d: " << a_b_c_d << " " << std::endl;
-
-                            geometry_msgs::Point p1;
-                            p1.x = int(total_x / total_point_number);
-                            p1.y = int(total_y / total_point_number);
-                            p1.z = int(total_z / total_point_number);
-                            line_list.points.push_back(p1);
-
-                            geometry_msgs::Point p2;
-                            p2.x = int(a_b_c_d.at<float>(0, 0)*10000);
-                            p2.y = int(a_b_c_d.at<float>(0, 1)*10000);
-                            p2.z = int(a_b_c_d.at<float>(0, 2)*10000);
-                            line_list.points.push_back(p2);
-                            //marker_pub.publish(line_list);
-
-                            // check even or odd at x axis, loop a counter for miuns or add for every x position
-                            // set the circle center at x / 2 + 1
-                            
-                            int slice_long = 50;
-                            int low_z = max_depth_sample_index * 50;
-                            int high_z = (max_depth_sample_index + 1) * 50;
-                            int even_or_odd = bbox_depth.cols % 2;
-                            int circle_R, circle_L, circle_C;
-
-                            if (even_or_odd == 0){
-                                circle_C = int(bbox_depth.cols / 2 + 1);
-                                circle_L = int(bbox_depth.cols / 2);
-                                circle_R = int(bbox_depth.cols / 2 - 1);
-                            }else{
-                                circle_C = int(bbox_depth.cols / 2 + 1);
-                                circle_L = int(bbox_depth.cols / 2);
-                                circle_R = int(bbox_depth.cols / 2);
-                            }
-                            
-                            int circle_sample_count[180] {0};
-                            for (int degree = 0; degree < 180; degree++){
-                                for (int i = 0; i < bbox_depth.rows; i++){
-                                    for (int j = 0; j < circle_C; j++){
-                                        int circle_j = circle_C - j - 1;
-                                        // 重寫轉角方式
-                                        int now_low_z = low_z - int(tan(degree*pi/180) * circle_j / 2);
-                                        int now_high_z = high_z - int(tan(degree*pi/180) * circle_j / 2);
-                                        
-                                        if (now_low_z < bbox_depth.at<float>(i, j) && bbox_depth.at<float>(i, j) < now_high_z){
-                                            circle_sample_count[degree]++;
-                                        }
-                                    }
-                                    // remember circle_C part
-                                    for (int j = circle_C + 1; j < bbox_depth.cols; j++){
-                                        int circle_j = j - circle_C;
-                                        int now_low_z = low_z - int(tan(degree*pi/180) * circle_j / 2);
-                                        int now_high_z = high_z - int(tan(degree*pi/180) * circle_j / 2);
-
-                                        if (now_low_z < bbox_depth.at<float>(i, j) && bbox_depth.at<float>(i, j) < now_high_z){
-                                            circle_sample_count[degree]++;
-                                        }
-                                    }
-                                }
-                            }
-
-                            int max_degree_index = 0;
-                            int max_degree_count = 0;
-                            for (int degree = 0; degree < 180; degree++){
-                                std ::cout << "circle_sample_count " << circle_sample_count[degree] << std::endl;
-                                if (max_degree_count < circle_sample_count[degree]){
-                                    max_depth_sample_index = degree;
-                                    max_degree_count = circle_sample_count[degree];
-                                }
-                            }
-                            std::cout << "max_depth_sample_index: " << max_depth_sample_index << " max_degree_count: " << max_degree_count << std::endl;
-                            
-                            // output plane points
-                            for (int i = 0; i < bbox_depth.rows; i++){
-                                for (int j = 0; j < circle_C; j++){
-                                    int circle_j = circle_C - j - 1;
-                                    int now_low_z = low_z - int(tan(max_depth_sample_index*pi/180) * circle_j / 2);
-                                    int now_high_z = high_z - int(tan(max_depth_sample_index*pi/180) * circle_j / 2);
-                                    
-                                    if (now_low_z < bbox_depth.at<float>(i, j) && bbox_depth.at<float>(i, j) < now_high_z){
-                                        geometry_msgs::Point p;
-                                        p.x = j;
-                                        p.y = i;
-                                        p.z = bbox_depth.at<float>(i, j);
-                                        points.points.push_back(p);
-                                    }
-                                }
-                                // remember circle_C part
-                                for (int j = circle_C + 1; j < bbox_depth.cols; j++){
-                                    int circle_j = j - circle_C;
-                                    int now_low_z = low_z + int(tan(max_depth_sample_index*pi/180) * circle_j / 2);
-                                    int now_high_z = high_z + int(tan(max_depth_sample_index*pi/180) * circle_j / 2);
-
-                                    if (now_low_z < bbox_depth.at<float>(i, j) && bbox_depth.at<float>(i, j) < now_high_z){
-                                        geometry_msgs::Point p;
-                                        p.x = j;
-                                        p.y = i;
-                                        p.z = bbox_depth.at<float>(i, j);
-                                        points.points.push_back(p);
-                                    }
-                                }
-                            }
-                            marker_pub.publish(points);                   
-                            //r.sleep();
-                            */         
-                            /*
-                            float average_x, average_y, average_z;
-                            average_x = total_x / total_point_number;
-                            average_y = total_y / total_point_number;
-                            average_z = total_z / total_point_number;
-                            cv::Mat avg_x_y_z = cv::Mat::zeros(cv::Size(3, 1), CV_32FC1);
-                            avg_x_y_z.at<float>(0, 0) = average_x;
-                            avg_x_y_z.at<float>(0, 1) = average_y;
-                            avg_x_y_z.at<float>(0, 2) = average_z;
-                            std::cout << total_x << " " << total_y << " " << total_z << " " << total_point_number << std::endl;
-                            std::cout << avg_x_y_z << std::endl;
-                            for (int r = 0; r < x_y_z.rows; ++r) {
-                                x_y_z.row(r) = x_y_z.row(r) - avg_x_y_z;
-                            }
-
-                            // show in rviz
-                            for (int i = 0; i < bbox_depth.rows; i++){
-                                for (int j = 0; j < bbox_depth.cols; j++){
-                                    if (int(bbox_depth.at<float>(i, j)/50) == max_depth_sample_index){
-                                        geometry_msgs::Point p;
-                                        p.x = j;
-                                        p.y = i;
-                                        p.z = bbox_depth.at<float>(i, j);
-                                        points.points.push_back(p);
-                                    }
-                                }
-                            }
-                                    
-                            
-                            marker_pub.publish(points);
-                            //marker_pub.publish(line_strip);
-                            //marker_pub.publish(line_list);
-                            //r.sleep();
-                            
-                            cv::Mat U, W, V;
-                            cv::SVD::compute(x_y_z, W, U, V);
-                            std::cout << U.rows << " " << U.cols << " " << std::endl;
-                            std::cout << W.rows << " " << W.cols << " " << std::endl;
-                            std::cout << V.rows << " " << V.cols << " " << std::endl;
-                            //std::cout << U.at<float>(2, 0) << " " << U.at<float>(2, 1) << " " << U.at<float>(2, 2) << std::endl;
-                            //std::cout << V.at<float>(2, 0) << " " << V.at<float>(2, 1) << " " << V.at<float>(2, 2) << std::endl;
-                            float AAA = V.at<float>(2, 0);
-                            float BBB = V.at<float>(2, 1);
-                            float CCC = V.at<float>(2, 2);
-                            float DDD = -(average_x * AAA + average_y * BBB + average_z * CCC); // ax + by + cz + d = 0
-                            printf("----------- %fx + %fy + %fz + %f = 0\n", AAA, BBB, CCC , DDD);
-
-                            geometry_msgs::Point p1;
-                            p1.x = average_x;
-                            p1.y = average_y;
-                            p1.z = average_z;
-                            line_list.points.push_back(p1);
-                            geometry_msgs::Point p2;
-                            p2.x = AAA*1000;
-                            p2.y = BBB*1000;
-                            p2.z = CCC*1000;
-                            line_list.points.push_back(p2);
-                            marker_pub.publish(line_list);
-                            */
                             cv::imshow("Detection results", frame);
                             cv::imshow("cut depth", bbox_depth);
                         }
@@ -1117,18 +790,16 @@ int main(int argc, char** argv) {
             }
 
             if (!FLAGS_no_show) {
-                
-                //cv::imshow("ori depth", depth_frame);
                 //cv::waitKey(0);
             }
 
             t1 = std::chrono::high_resolution_clock::now();
             ocv_render_time = std::chrono::duration_cast<ms>(t1 - t0).count();
-
+            /*
             if (isLastFrame) {
                 break;
             }
-
+            */
             if (isModeChanged) {
                 isModeChanged = false;
             }
